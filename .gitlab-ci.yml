@@ -1,0 +1,79 @@
+# 1. Base Docker image containing OpenJDK 17 and Maven
+image: maven:3.9-eclipse-temurin-17
+
+# 2. Define the pipeline execution stages in sequential order
+stages:
+  - prepare
+  - build
+  - test
+  - deploy
+
+# 3. Cache the local Maven repository across builds so we don't re-download dependencies every run
+cache:
+  key: maven-cache-$CI_COMMIT_REF_SLUG
+  paths:
+    - .m2/repository
+
+# -------------------------------------------------------------------
+# STAGE 1: PREPARE
+# -------------------------------------------------------------------
+check-environment:
+  stage: prepare
+  script:
+    - echo "=== Verifying Runner Environment ==="
+    - java -version
+    - mvn -version
+    - pwd
+    - ls -la
+
+# -------------------------------------------------------------------
+# STAGE 2: BUILD
+# -------------------------------------------------------------------
+compile-and-package:
+  stage: build
+  script:
+    - echo "=== Building Spring Boot Application ==="
+    - mvn clean package -DskipTests
+  artifacts:
+    name: "spring-boot-app-$CI_COMMIT_SHORT_SHA"
+    expire_in: 3 days
+    paths:
+      - target/*.jar
+
+# -------------------------------------------------------------------
+# STAGE 3: TEST
+# -------------------------------------------------------------------
+run-unit-tests:
+  stage: test
+  cache:
+    key: maven-cache-$CI_COMMIT_REF_SLUG
+    paths:
+      - .m2/repository
+    policy: pull  # Only read from cache, don't re-upload
+  script:
+    - echo "=== Running Unit Tests ==="
+    - mvn test
+  artifacts:
+    when: always
+    paths:
+      - target/surefire-reports/
+
+# -------------------------------------------------------------------
+# STAGE 4: DEPLOY
+# -------------------------------------------------------------------
+deploy-to-staging:
+  stage: deploy
+  image: alpine:latest
+  before_script:
+    - apk add --no-cache bash curl
+  script:
+    - echo "=== Deploying to Staging Environment ==="
+    - ls -lh target/*.jar
+    - echo "App successfully verified and ready for deployment!"
+  environment:
+    name: staging
+    url: https://staging.mycompany.internal
+  rules:
+    # Only show this job when committed to main, and require a human button click
+    - if: '$CI_COMMIT_BRANCH == "main"'
+      when: manual
