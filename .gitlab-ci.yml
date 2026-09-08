@@ -75,10 +75,12 @@ deploy-to-staging:
     name: staging
     url: https://staging.mycompany.internal
   rules:
-    # Only show this job when committed to main, and require a human button click
     - if: '$CI_COMMIT_BRANCH == "main"'
       when: on_success
 
+# -------------------------------------------------------------------
+# STAGE 5: SYNC TO GITHUB & BROADCAST NOTIFICATION
+# -------------------------------------------------------------------
 sync_and_create_mr_on_github:
   stage: sync_github
   image: alpine:latest
@@ -89,14 +91,13 @@ sync_and_create_mr_on_github:
     - git config --global user.name "Ignosis"
     - git config --global user.email "dev@ignosis.ai"
 
-    # Match the GitHub target branch directly to the active GitLab branch
+    # Match target GitHub branch to current GitLab branch name
     - TARGET_BRANCH="${CI_COMMIT_REF_NAME}"
     - 'echo "Isolated target repository: ${GITHUB_OWNER}/${GITHUB_REPO}"'
     - 'echo "Syncing branch: ${TARGET_BRANCH}"'
 
     - echo "=== Step 2: Mirroring Branch to GitHub ==="
     - git remote add github https://${GITHUB_TOKEN}@github.com/${GITHUB_OWNER}/${GITHUB_REPO}.git || git remote set-url github https://${GITHUB_TOKEN}@github.com/${GITHUB_OWNER}/${GITHUB_REPO}.git
-    # Force push updates to the matching branch name on GitHub
     - git push github HEAD:refs/heads/${TARGET_BRANCH} --force
 
     - echo "=== Step 3: Triggering GitHub REST API for Pull Request ==="
@@ -114,12 +115,13 @@ sync_and_create_mr_on_github:
 
     - echo "Full API Response: ${PR_RESPONSE}"
 
-    # Extract PR URL or fallback to existing PR URL if already open
+    # Try extracting PR URL from creation response
     - PR_URL=$(echo "$PR_RESPONSE" | jq -r '.html_url // empty')
 
+    # Fallback to fetching existing PR URL if it already exists
     - |
       if [ -z "$PR_URL" ]; then
-        echo "Checking if a Pull Request already exists for ${TARGET_BRANCH}..."
+        echo "Checking if Pull Request already exists..."
         EXISTING_PR=$(curl -s -H "Authorization: Bearer ${GITHUB_TOKEN}" \
           "https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/pulls?head=${GITHUB_OWNER}:${TARGET_BRANCH}&base=develop")
         PR_URL=$(echo "$EXISTING_PR" | jq -r '.[0].html_url // empty')
@@ -127,14 +129,13 @@ sync_and_create_mr_on_github:
 
     - |
       if [ -z "$PR_URL" ]; then
-        echo "Could not resolve or create Pull Request. Response:"
-        echo "$PR_RESPONSE"
+        echo "Could not resolve or create Pull Request."
         exit 1
       fi
 
     - echo "Pull Request ready at: ${PR_URL}"
 
-    - echo "=== Step 4: Configuring SMTP & Broadcasting HTML Email ==="
+    - echo "=== Step 4: Configuring SMTP & Broadcasting Plaintext Email ==="
     - |
       cat <<EOF > /etc/msmtprc
       defaults
@@ -156,22 +157,22 @@ sync_and_create_mr_on_github:
       cat <<EOF | msmtp -v -a default ${RECIPIENT_EMAILS}
       To: ${RECIPIENT_EMAILS}
       From: ${SMTP_FROM_EMAIL}
-      Subject: [ PR Created ] ${GITHUB_REPO} - Work by ${GITLAB_USER_NAME}
-      
+      Subject: [ PR Updated ] ${GITHUB_REPO} (${TARGET_BRANCH}) - Work by ${GITLAB_USER_NAME}
+
       Hello Team,
-      
-      A new Merge Request (Pull Request) has been created on GitHub for the '${GITHUB_REPO}' repository targeting the 'develop' branch.
-      
+
+      A Pull Request targeting 'develop' has been synced on GitHub for repository '${GITHUB_REPO}'.
+
       • Developer: ${GITLAB_USER_NAME}
       • Repository: ${GITHUB_REPO}
+      • Branch: ${TARGET_BRANCH}
       • Commit SHA: ${CI_COMMIT_SHORT_SHA}
-      • Target Branch: develop
-      
+
       Review and Merge PR here:
       ${PR_URL}
-      
+
       --
       Automated Notification | GitLab CI / Ignosis Pipeline
       EOF
 
-    - echo "HTML notification email sent successfully!"
+    - echo "Plain text notification email sent successfully!"
