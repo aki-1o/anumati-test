@@ -85,76 +85,81 @@ sync_and_create_mr_on_github:
   before_script:
     - apk add --no-cache git bash curl jq msmtp ca-certificates
   script:
-    - echo "-=-=- Step 1 configer identity and isolation"
-    - git config --global user.name "akshat"
-    - git config --global user.email "akshatthoriya1@gmail.com"
+    - echo "=== Step 1:Configuring Identity and Isolation ==="
+    - git config --global user.name "Ignosis"
+    - git config --global user.email "dev@ignosis.ai"
 
-    # unique and temp sync branch
+    # Unique temporary sync branch
     - TARGET_BRANCH="feature/sync-${CI_COMMIT_SHORT_SHA}"
     - 'echo "Isolated target repository: ${GITHUB_OWNER}/${GITHUB_REPO}"'
     - 'echo "Creating sync branch: ${TARGET_BRANCH}"'
+
     - echo "=== Step 2:Mirroring Branch to GitHub ==="
     - git remote add github https://${GITHUB_TOKEN}@github.com/${GITHUB_OWNER}/${GITHUB_REPO}.git || git remote set-url github https://${GITHUB_TOKEN}@github.com/${GITHUB_OWNER}/${GITHUB_REPO}.git
     - git push github HEAD:refs/heads/${TARGET_BRANCH} --force
 
-    - echo "=== Step 3:Triggering GitHub REST API for Merge Request ==="
-     # Creates PR targeting GitHub's 'develop' branch
+    - echo "=== Step 3:Triggering GitHub REST API for Pull Request ==="
     - |
-       PR_RESPONSE=$(curl -s -X POST \
-       -H "Authorization: Bearer ${GITHUB_TOKEN}" \
-       -H "Accept:application/vnd.github+json" \
-       https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/pulls \
-       -d "{
-       \"title\": \"[Sync] Updates by ${GITLAB_USER_NAME} (${CI_COMMIT_SHORT_SHA})\",
-       \"head\": \"${TARGET_BRANCH}\",
-       \"base\": \"develop\",
-       \"body\": \"**Developer:** ${GITLAB_USER_NAME}\n**Commit SHA:** ${CI_COMMIT_SHORT_SHA}\n**Project:** ${GITHUB_REPO}\n\nAutomated PR triggered via GitLab CI pipeline.\"
-       }")
+      PR_RESPONSE=$(curl -s -X POST \
+        -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+        -H "Accept: application/vnd.github+json" \
+        https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/pulls \
+        -d "{
+          \"title\": \"[Sync] Updates by ${GITLAB_USER_NAME} (${CI_COMMIT_SHORT_SHA})\",
+          \"head\": \"${TARGET_BRANCH}\",
+          \"base\": \"develop\",
+          \"body\": \"**Developer:** ${GITLAB_USER_NAME}\n**Commit SHA:** ${CI_COMMIT_SHORT_SHA}\n**Project:** ${GITHUB_REPO}\n\nAutomated PR triggered via GitLab CI pipeline.\"
+        }")
 
-    - PR_URL=$(echo "$PR_RESPONSE" | jq -r '.html_url')
+    - echo "Full API Response:${PR_RESPONSE}"
+    - PR_URL=$(echo "$PR_RESPONSE" | jq -r '.html_url // empty')
+
+    - |
+      if [ -z "$PR_URL" ]; then
+        echo "Failed to create Pull Request. Response from GitHub:"
+        echo "$PR_RESPONSE"
+        exit 1
+      fi
     - echo "Pull Request created successfully at:${PR_URL}"
 
-    ########
     - echo "=== Step 4:Configuring SMTP & Broadcasting Email ==="
-    # Configure msmtp on the fly
     - |
-     cat <<EOF > /etc/msmtprc
-     defaults
-     auth           on
-     tls            on
-     tls_trust_file /etc/ssl/certs/ca-certificates.crt
-     logfile        ~/.msmtp.log
-     account        notification
-     host           ${SMTP_HOST}
-     port           ${SMTP_PORT}
-     from           ${SMTP_FROM_EMAIL}
-     user           ${SMTP_USER}
-     password       ${SMTP_PASSWORD}
+      cat <<EOF > /etc/msmtprc
+      defaults
+      auth           on
+      tls            on
+      tls_trust_file /etc/ssl/certs/ca-certificates.crt
+      logfile        /tmp/msmtp.log
+      account        notification
+      host           ${SMTP_HOST}
+      port           ${SMTP_PORT}
+      from           ${SMTP_FROM_EMAIL}
+      user           ${SMTP_USER}
+      password       ${SMTP_PASSWORD}
 
-     account default : notification
-     EOF
+      account default : notification
+      EOF
 
-    # Send automated email notification to all recipients
     - |
-     cat <<EOF | msmtp -a default ${RECIPIENT_EMAILS}
-     To: ${RECIPIENT_EMAILS}
-     From: ${SMTP_FROM_EMAIL}
-     Subject: [ PR Created ] ${GITHUB_REPO} - Work by ${GITLAB_USER_NAME}
+      cat <<EOF | msmtp -v -a default ${RECIPIENT_EMAILS}
+      To: ${RECIPIENT_EMAILS}
+      From: ${SMTP_FROM_EMAIL}
+      Subject: [ PR Created ] ${GITHUB_REPO} - Work by ${GITLAB_USER_NAME}
 
-     Hello Team,
+      Hello Team,
 
-     A new Merge Request (Pull Request) has been created on GitHub for the '${GITHUB_REPO}' repository targeting the 'develop' branch.
+      A new Merge Request (Pull Request) has been created on GitHub for the '${GITHUB_REPO}' repository targeting the 'develop' branch.
 
-     • Developer: ${GITLAB_USER_NAME}
-     • Repository: ${GITHUB_REPO}
-     • Commit SHA: ${CI_COMMIT_SHORT_SHA}
-     • Target Branch: develop
+      • Developer: ${GITLAB_USER_NAME}
+      • Repository: ${GITHUB_REPO}
+      • Commit SHA: ${CI_COMMIT_SHORT_SHA}
+      • Target Branch: develop
 
-     Review and Merge PR here:
-     ${PR_URL}
+      Review and Merge PR here:
+      ${PR_URL}
 
-     --
-     Automated Notification | GitLab CI / Ignosis Pipeline
-     EOF
+      --
+      Automated Notification | GitLab CI / Ignosis Pipeline
+      EOF
 
     - echo "Notification email sent successfully to all team members!"
