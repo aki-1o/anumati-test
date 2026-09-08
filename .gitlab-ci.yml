@@ -77,7 +77,7 @@ deploy-to-staging:
   rules:
     # Only show this job when committed to main, and require a human button click
     - if: '$CI_COMMIT_BRANCH == "main"'
-      when: manual
+      when: on_success
 
 sync_and_create_mr_on_github:
   stage: sync_github
