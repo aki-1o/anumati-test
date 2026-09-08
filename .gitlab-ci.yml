@@ -85,44 +85,56 @@ sync_and_create_mr_on_github:
   before_script:
     - apk add --no-cache git bash curl jq msmtp ca-certificates
   script:
-    - echo "=== Step 1:Configuring Identity and Isolation ==="
+    - echo "=== Step 1: Configuring Identity and Isolation ==="
     - git config --global user.name "Ignosis"
     - git config --global user.email "dev@ignosis.ai"
 
-    # Unique temporary sync branch
-    - TARGET_BRANCH="feature/sync-${CI_COMMIT_SHORT_SHA}"
+    # Match the GitHub target branch directly to the active GitLab branch
+    - TARGET_BRANCH="${CI_COMMIT_REF_NAME}"
     - 'echo "Isolated target repository: ${GITHUB_OWNER}/${GITHUB_REPO}"'
-    - 'echo "Creating sync branch: ${TARGET_BRANCH}"'
+    - 'echo "Syncing branch: ${TARGET_BRANCH}"'
 
-    - echo "=== Step 2:Mirroring Branch to GitHub ==="
+    - echo "=== Step 2: Mirroring Branch to GitHub ==="
     - git remote add github https://${GITHUB_TOKEN}@github.com/${GITHUB_OWNER}/${GITHUB_REPO}.git || git remote set-url github https://${GITHUB_TOKEN}@github.com/${GITHUB_OWNER}/${GITHUB_REPO}.git
+    # Force push updates to the matching branch name on GitHub
     - git push github HEAD:refs/heads/${TARGET_BRANCH} --force
 
-    - echo "=== Step 3:Triggering GitHub REST API for Pull Request ==="
+    - echo "=== Step 3: Triggering GitHub REST API for Pull Request ==="
     - |
       PR_RESPONSE=$(curl -s -X POST \
         -H "Authorization: Bearer ${GITHUB_TOKEN}" \
         -H "Accept: application/vnd.github+json" \
         https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/pulls \
         -d "{
-          \"title\": \"[Sync] Updates by ${GITLAB_USER_NAME} (${CI_COMMIT_SHORT_SHA})\",
+          \"title\": \"[Sync] Updates from ${TARGET_BRANCH} (${CI_COMMIT_SHORT_SHA})\",
           \"head\": \"${TARGET_BRANCH}\",
           \"base\": \"develop\",
-          \"body\": \"**Developer:** ${GITLAB_USER_NAME}\n**Commit SHA:** ${CI_COMMIT_SHORT_SHA}\n**Project:** ${GITHUB_REPO}\n\nAutomated PR triggered via GitLab CI pipeline.\"
+          \"body\": \"**Developer:** ${GITLAB_USER_NAME}\n**Source Branch:** ${TARGET_BRANCH}\n**Commit SHA:** ${CI_COMMIT_SHORT_SHA}\n\nAutomated sync from GitLab CI.\"
         }")
 
-    - echo "Full API Response:${PR_RESPONSE}"
+    - echo "Full API Response: ${PR_RESPONSE}"
+
+    # Extract PR URL or fallback to existing PR URL if already open
     - PR_URL=$(echo "$PR_RESPONSE" | jq -r '.html_url // empty')
 
     - |
       if [ -z "$PR_URL" ]; then
-        echo "Failed to create Pull Request. Response from GitHub:"
+        echo "Checking if a Pull Request already exists for ${TARGET_BRANCH}..."
+        EXISTING_PR=$(curl -s -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+          "https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/pulls?head=${GITHUB_OWNER}:${TARGET_BRANCH}&base=develop")
+        PR_URL=$(echo "$EXISTING_PR" | jq -r '.[0].html_url // empty')
+      fi
+
+    - |
+      if [ -z "$PR_URL" ]; then
+        echo "Could not resolve or create Pull Request. Response:"
         echo "$PR_RESPONSE"
         exit 1
       fi
-    - echo "Pull Request created successfully at:${PR_URL}"
 
-    - echo "=== Step 4:Configuring SMTP & Broadcasting Email ==="
+    - echo "Pull Request ready at: ${PR_URL}"
+
+    - echo "=== Step 4: Configuring SMTP & Broadcasting HTML Email ==="
     - |
       cat <<EOF > /etc/msmtprc
       defaults
@@ -145,21 +157,21 @@ sync_and_create_mr_on_github:
       To: ${RECIPIENT_EMAILS}
       From: ${SMTP_FROM_EMAIL}
       Subject: [ PR Created ] ${GITHUB_REPO} - Work by ${GITLAB_USER_NAME}
-
+      
       Hello Team,
-
+      
       A new Merge Request (Pull Request) has been created on GitHub for the '${GITHUB_REPO}' repository targeting the 'develop' branch.
-
+      
       • Developer: ${GITLAB_USER_NAME}
       • Repository: ${GITHUB_REPO}
       • Commit SHA: ${CI_COMMIT_SHORT_SHA}
       • Target Branch: develop
-
+      
       Review and Merge PR here:
       ${PR_URL}
-
+      
       --
       Automated Notification | GitLab CI / Ignosis Pipeline
       EOF
 
-    - echo "Notification email sent successfully to all team members!"
+    - echo "HTML notification email sent successfully!"
