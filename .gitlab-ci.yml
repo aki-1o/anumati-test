@@ -75,10 +75,12 @@ deploy-to-staging:
     name: staging
     url: https://staging.mycompany.internal
   rules:
-    # Only show this job when committed to main, and require a human button click
     - if: '$CI_COMMIT_BRANCH == "main"'
-      when: manual
+      when: on_success
 
+# -------------------------------------------------------------------
+# STAGE 5: SYNC TO GITHUB & BROADCAST NOTIFICATION
+# -------------------------------------------------------------------
 sync_and_create_mr_on_github:
   stage: sync_github
   image: alpine:latest
@@ -89,10 +91,10 @@ sync_and_create_mr_on_github:
     - git config --global user.name "Ignosis"
     - git config --global user.email "dev@ignosis.ai"
 
-    # Unique temporary sync branch
-    - TARGET_BRANCH="feature/sync-${CI_COMMIT_SHORT_SHA}"
+    # Match target GitHub branch to current GitLab branch name
+    - TARGET_BRANCH="${CI_COMMIT_REF_NAME}"
     - 'echo "Isolated target repository: ${GITHUB_OWNER}/${GITHUB_REPO}"'
-    - 'echo "Creating sync branch: ${TARGET_BRANCH}"'
+    - 'echo "Syncing branch: ${TARGET_BRANCH}"'
 
     - echo "=== Step 2:Mirroring Branch to GitHub ==="
     - git remote add github https://${GITHUB_TOKEN}@github.com/${GITHUB_OWNER}/${GITHUB_REPO}.git || git remote set-url github https://${GITHUB_TOKEN}@github.com/${GITHUB_OWNER}/${GITHUB_REPO}.git
@@ -105,24 +107,35 @@ sync_and_create_mr_on_github:
         -H "Accept: application/vnd.github+json" \
         https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/pulls \
         -d "{
-          \"title\": \"[Sync] Updates by ${GITLAB_USER_NAME} (${CI_COMMIT_SHORT_SHA})\",
+          \"title\": \"[Sync] Updates from ${TARGET_BRANCH} (${CI_COMMIT_SHORT_SHA})\",
           \"head\": \"${TARGET_BRANCH}\",
           \"base\": \"develop\",
-          \"body\": \"**Developer:** ${GITLAB_USER_NAME}\n**Commit SHA:** ${CI_COMMIT_SHORT_SHA}\n**Project:** ${GITHUB_REPO}\n\nAutomated PR triggered via GitLab CI pipeline.\"
+          \"body\": \"**Developer:** ${GITLAB_USER_NAME}\n**Source Branch:** ${TARGET_BRANCH}\n**Commit SHA:** ${CI_COMMIT_SHORT_SHA}\n\nAutomated sync from GitLab CI.\"
         }")
 
     - echo "Full API Response:${PR_RESPONSE}"
+
+    # Try extracting PR URL from creation response
     - PR_URL=$(echo "$PR_RESPONSE" | jq -r '.html_url // empty')
+
+    # Fallback to fetching existing PR URL if it already exists
+    - |
+      if [ -z "$PR_URL" ]; then
+        echo "Checking if Pull Request already exists..."
+        EXISTING_PR=$(curl -s -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+          "https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/pulls?head=${GITHUB_OWNER}:${TARGET_BRANCH}&base=develop")
+        PR_URL=$(echo "$EXISTING_PR" | jq -r '.[0].html_url // empty')
+      fi
 
     - |
       if [ -z "$PR_URL" ]; then
-        echo "Failed to create Pull Request. Response from GitHub:"
-        echo "$PR_RESPONSE"
+        echo "Could not resolve or create Pull Request."
         exit 1
       fi
-    - echo "Pull Request created successfully at:${PR_URL}"
 
-    - echo "=== Step 4:Configuring SMTP & Broadcasting Email ==="
+    - echo "Pull Request ready at:${PR_URL}"
+
+    - echo "=== Step 4:Configuring SMTP & Broadcasting Plaintext Email ==="
     - |
       cat <<EOF > /etc/msmtprc
       defaults
@@ -144,16 +157,16 @@ sync_and_create_mr_on_github:
       cat <<EOF | msmtp -v -a default ${RECIPIENT_EMAILS}
       To: ${RECIPIENT_EMAILS}
       From: ${SMTP_FROM_EMAIL}
-      Subject: [ PR Created ] ${GITHUB_REPO} - Work by ${GITLAB_USER_NAME}
+      Subject: [ PR Updated ] ${GITHUB_REPO} (${TARGET_BRANCH}) - Work by ${GITLAB_USER_NAME}
 
       Hello Team,
 
-      A new Merge Request (Pull Request) has been created on GitHub for the '${GITHUB_REPO}' repository targeting the 'develop' branch.
+      A Pull Request targeting 'develop' has been synced on GitHub for repository '${GITHUB_REPO}'.
 
       • Developer: ${GITLAB_USER_NAME}
       • Repository: ${GITHUB_REPO}
+      • Branch: ${TARGET_BRANCH}
       • Commit SHA: ${CI_COMMIT_SHORT_SHA}
-      • Target Branch: develop
 
       Review and Merge PR here:
       ${PR_URL}
@@ -162,4 +175,4 @@ sync_and_create_mr_on_github:
       Automated Notification | GitLab CI / Ignosis Pipeline
       EOF
 
-    - echo "Notification email sent successfully to all team members!"
+    - echo "Plain text notification email sent successfully!"
