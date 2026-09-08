@@ -146,20 +146,51 @@ sync_and_create_mr_on_github:
       From: ${SMTP_FROM_EMAIL}
       Subject: [ PR Created ] ${GITHUB_REPO} - Work by ${GITLAB_USER_NAME}
 
-      Hello Team,
+      MIME-Version: 1.0
+      Content-Type: text/html; charset=UTF-8
 
-      A new Merge Request (Pull Request) has been created on GitHub for the '${GITHUB_REPO}' repository targeting the 'develop' branch.
-
-      • Developer: ${GITLAB_USER_NAME}
-      • Repository: ${GITHUB_REPO}
-      • Commit SHA: ${CI_COMMIT_SHORT_SHA}
-      • Target Branch: develop
-
-      Review and Merge PR here:
-      ${PR_URL}
-
-      --
-      Automated Notification | GitLab CI / Ignosis Pipeline
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <style>
+          body { font-family: Arial, sans-serif; background-color: #f4f6f8; padding: 20px; margin: 0; }
+          .container { background-color: #ffffff; padding: 24px; border-radius: 8px; max-width: 600px; border: 1px solid #e1e4e8; }
+          .header { font-size: 18px; font-weight: bold; color: #24292e; margin-bottom: 16px; }
+          .details { margin: 16px 0; line-height: 1.6; color: #444444; }
+          .btn {
+            display: inline-block;
+            background-color: #2da44e;
+            color: #ffffff !important;
+            padding: 12px 24px;
+            font-size: 14px;
+            font-weight: bold;
+            text-decoration: none;
+            border-radius: 6px;
+            margin-top: 16px;
+          }
+          .footer { margin-top: 24px; font-size: 12px; color: #888888; border-top: 1px solid #eee; padding-top: 12px; }
+        </style>
+      </head>
+      <body>
+        <div class="container">
+          <div class="header">🚀 New Merge Request Created</div>
+          <div class="details">
+            <p>Hello Team,</p>
+            <p>A new Pull Request has been automatically opened on GitHub for <strong>${GITHUB_REPO}</strong> targeting the <code>develop</code> branch.</p>
+            <ul>
+              <li><strong>Developer:</strong> ${GITLAB_USER_NAME}</li>
+              <li><strong>Repository:</strong> ${GITHUB_REPO}</li>
+              <li><strong>Commit SHA:</strong> <code>${CI_COMMIT_SHORT_SHA}</code></li>
+              <li><strong>Target Branch:</strong> <code>develop</code></li>
+            </ul>
+            <a href="${PR_URL}" class="btn" target="_blank">Review and Merge PR</a>
+          </div>
+          <div class="footer">
+            Automated Notification | GitLab CI / Ignosis Pipeline
+          </div>
+        </div>
+      </body>
+      </html>
       EOF
 
     - echo "Notification email sent successfully to all team members!"
