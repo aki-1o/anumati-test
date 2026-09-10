@@ -79,10 +79,15 @@ fast_sync_and_poc:
 
       gmail_url = f'https://mail.google.com/mail/?view=cm&fs=1&to={encoded_to}&su={encoded_su}&body={encoded_body}'
 
+      # OSC 8 Escape Sequence for clickable link text
+      link_text = f'\033]8;;{gmail_url}\033\\👉 CLICK HERE TO OPEN GMAIL DRAFT IN NEW TAB 👈\033]8;;\033\\'
+
       print('\n==========================================================================')
       print(f'  EMAIL DRAFT READY FOR USER - {user_name} ({user_email})')
       print('==========================================================================')
-      print('  Ctrl/Cmd + Click to open pre-filled Gmail draft in NEW TAB:')
+      print('  Terminal Hyperlink (if supported by browser/terminal):')
+      print(f'  {link_text}')
+      print('\n  Raw URL (Ctrl + Click or Cmd + Click to force open in NEW TAB):')
       print(f'  {gmail_url}')
       print('==========================================================================\n')
       "
