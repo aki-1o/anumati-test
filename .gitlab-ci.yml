@@ -144,7 +144,7 @@ sync_and_create_mr_on_github:
       dotenv: build.env
 
 
-# PART 2: Email POC (Draft Link Output)
+# PART 2: Email POC (Fully Pre-written Email Draft Link Output)
 poc_email_link:
   stage: sync_github
   image: alpine:latest
@@ -152,24 +152,31 @@ poc_email_link:
     - job: sync_and_create_mr_on_github
       artifacts: true
   script:
-    - echo "=-=-= Step 4 - Generating Email Draft POC Link =-=-="
+    - echo "=-=-= Step 4 - Generating Complete Email Draft POC Link =-=-="
 
-    # 1. Target recipients (Use your CI variable or hardcoded team emails)
+    # 1. Target recipients
     - TARGET_RECIPIENTS="${RECIPIENT_EMAILS}"
 
     # 2. Format Subject & Body (URL-encoded: %0D%0A creates newlines)
     - SUBJECT_TEXT="[ PR Updated ] ${GITHUB_REPO} (${CI_COMMIT_REF_NAME}) - Work by ${GITLAB_USER_NAME}"
     - BODY_TEXT="Hello Team,%0D%0A%0D%0AA Pull Request targeting 'develop' has been synced on GitHub for repository '${GITHUB_REPO}'.%0D%0A%0D%0A• Developer:${GITLAB_USER_NAME} (${GITLAB_USER_EMAIL})%0D%0A• Repository:${GITHUB_REPO}%0D%0A• Branch:${CI_COMMIT_REF_NAME}%0D%0A• Commit SHA:${CI_COMMIT_SHORT_SHA}%0D%0A%0D%0AReview and Merge PR here:%0D%0A${PR_URL}%0D%0A%0D%0A--%0D%0AAutomated Notification | GitLab CI"
 
-    # 3. Construct Web Gmail Composer URL & Mailto fallback URL
+    # 2. Format Subject Line
+    - SUBJECT_TEXT="[PR Sync] ${GITHUB_REPO} - ${CI_COMMIT_REF_NAME} by ${GITLAB_USER_NAME}"
+
+    # 3. Complete pre-written email body draft (using %0D%0A for clean newlines)
+    - |
+      BODY_TEXT="Hi Team,%0D%0A%0D%0AA new Pull Request targeting 'develop' has been automatically created on GitHub for repository '${GITHUB_REPO}'.%0D%0A%0D%0AHere are the details:%0D%0A- Developer: ${GITLAB_USER_NAME} (${GITLAB_USER_EMAIL})%0D%0A- Repository: ${GITHUB_REPO}%0D%0A- Source Branch: ${CI_COMMIT_REF_NAME}%0D%0A- Target Branch: develop%0D%0A- Commit SHA: ${CI_COMMIT_SHORT_SHA}%0D%0A%0D%0APlease review and merge the Pull Request here:%0D%0A${PR_URL}%0D%0A%0D%0ARegards,%0D%0A${GITLAB_USER_NAME}"
+
+    # 4. Construct Web Gmail Composer URL & Mailto fallback URL
     - GMAIL_COMPOSE_URL="https://mail.google.com/mail/?view=cm&fs=1&to=${TARGET_RECIPIENTS}&su=${SUBJECT_TEXT}&body=${BODY_TEXT}"
     - MAILTO_URL="mailto:${TARGET_RECIPIENTS}?subject=${SUBJECT_TEXT}&body=${BODY_TEXT}"
 
-    # 4. Output the clickable links into the job log
+    # 5. Output the clickable links into the job log
     - echo -e "\n=========================================================================="
     - echo -e "  EMAIL DRAFT READY FOR USER - ${GITLAB_USER_NAME} (${GITLAB_USER_EMAIL})"
     - echo -e "=========================================================================="
-    - echo -e "  OPTION 1 (Web Gmail) - Ctrl/Cmd + Click to open pre-filled Gmail draft"
+    - echo -e "  OPTION 1 (Web Gmail) - Ctrl/Cmd + Click to open pre-drafted email in browser"
     - echo -e "  ${GMAIL_COMPOSE_URL}"
     - echo -e "\n  OPTION 2 (Default Client) - Ctrl/Cmd + Click for native Mail app / Outlook"
     - echo -e "  ${MAILTO_URL}"
