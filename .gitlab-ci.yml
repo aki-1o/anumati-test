@@ -21,7 +21,7 @@ cache:
 check-environment:
   stage: prepare
   script:
-    - echo "=== Verifying Runner Environment ==="
+    - echo "=-=-= Verifying Runner Environment =-=-="
     - java -version
     - mvn -version
     - pwd
@@ -33,7 +33,7 @@ check-environment:
 compile-and-package:
   stage: build
   script:
-    - echo "=== Building Spring Boot Application ==="
+    - echo "=-=-= Building Spring Boot Application =-=-="
     - mvn clean package -DskipTests
   artifacts:
     name: "spring-boot-app-$CI_COMMIT_SHORT_SHA"
@@ -52,7 +52,7 @@ run-unit-tests:
       - .m2/repository
     policy: pull  # Only read from cache, don't re-upload
   script:
-    - echo "=== Running Unit Tests ==="
+    - echo "=-=-= Running Unit Tests =-=-="
     - mvn test
   artifacts:
     when: always
@@ -68,7 +68,7 @@ deploy-to-staging:
   before_script:
     - apk add --no-cache bash curl
   script:
-    - echo "=== Deploying to Staging Environment ==="
+    - echo "=-=-= Deploying to Staging Environment =-=-="
     - ls -lh target/*.jar
     - echo "App successfully verified and ready for deployment!"
   environment:
@@ -81,26 +81,28 @@ deploy-to-staging:
 # -------------------------------------------------------------------
 # STAGE 5: SYNC TO GITHUB & BROADCAST NOTIFICATION
 # -------------------------------------------------------------------
+
+# PART 1: Sync branch & Create GitHub PR
 sync_and_create_mr_on_github:
   stage: sync_github
   image: alpine:latest
   before_script:
-    - apk add --no-cache git bash curl jq msmtp ca-certificates
+    - apk add --no-cache git bash curl jq
   script:
-    - echo "=== Step 1:Configuring Identity and Isolation ==="
-    - git config --global user.name "Ignosis"
-    - git config --global user.email "dev@ignosis.ai"
+    - echo "=-=-= Step 1 - Configuring Identity and Isolation =-=-="
+    - git config --global user.name "${GITLAB_USER_NAME}"
+    - git config --global user.email "${GITLAB_USER_EMAIL}"
 
     # Match target GitHub branch to current GitLab branch name
     - TARGET_BRANCH="${CI_COMMIT_REF_NAME}"
-    - 'echo "Isolated target repository: ${GITHUB_OWNER}/${GITHUB_REPO}"'
-    - 'echo "Syncing branch: ${TARGET_BRANCH}"'
+    - 'echo "Isolated target repository - ${GITHUB_OWNER}/${GITHUB_REPO}"'
+    - 'echo "Syncing branch - ${TARGET_BRANCH}"'
 
-    - echo "=== Step 2:Mirroring Branch to GitHub ==="
+    - echo "=-=-= Step 2 - Mirroring Branch to GitHub =-=-="
     - git remote add github https://${GITHUB_TOKEN}@github.com/${GITHUB_OWNER}/${GITHUB_REPO}.git || git remote set-url github https://${GITHUB_TOKEN}@github.com/${GITHUB_OWNER}/${GITHUB_REPO}.git
     - git push github HEAD:refs/heads/${TARGET_BRANCH} --force
 
-    - echo "=== Step 3:Triggering GitHub REST API for Pull Request ==="
+    - echo "=-=-= Step 3 - Triggering GitHub REST API for Pull Request =-=-="
     - |
       PR_RESPONSE=$(curl -s -X POST \
         -H "Authorization: Bearer ${GITHUB_TOKEN}" \
@@ -109,16 +111,16 @@ sync_and_create_mr_on_github:
         -d "{
           \"title\": \"[Sync] Updates from ${TARGET_BRANCH} (${CI_COMMIT_SHORT_SHA})\",
           \"head\": \"${TARGET_BRANCH}\",
-          \"base\": \"develop\",
+          \"base\": \"develop\",                                
           \"body\": \"**Developer:** ${GITLAB_USER_NAME}\n**Source Branch:** ${TARGET_BRANCH}\n**Commit SHA:** ${CI_COMMIT_SHORT_SHA}\n\nAutomated sync from GitLab CI.\"
         }")
 
-    - echo "Full API Response:${PR_RESPONSE}"
+    - echo "Full API Response - ${PR_RESPONSE}"
 
     # Try extracting PR URL from creation response
     - PR_URL=$(echo "$PR_RESPONSE" | jq -r '.html_url // empty')
 
-    # Fallback to fetching existing PR URL if it already exists
+    # Fetching existing PR URL if already exists
     - |
       if [ -z "$PR_URL" ]; then
         echo "Checking if Pull Request already exists..."
@@ -133,46 +135,42 @@ sync_and_create_mr_on_github:
         exit 1
       fi
 
-    - echo "Pull Request ready at:${PR_URL}"
+    - echo "Pull Request ready at - ${PR_URL}"
 
-    - echo "=== Step 4:Configuring SMTP & Broadcasting Plaintext Email ==="
-    - |
-      cat <<EOF > /etc/msmtprc
-      defaults
-      auth           on
-      tls            on
-      tls_trust_file /etc/ssl/certs/ca-certificates.crt
-      logfile        /tmp/msmtp.log
-      account        notification
-      host           ${SMTP_HOST}
-      port           ${SMTP_PORT}
-      from           ${SMTP_FROM_EMAIL}
-      user           ${SMTP_USER}
-      password       ${SMTP_PASSWORD}
+    # Pass PR_URL to downstream jobs via dotenv artifact
+    - echo "PR_URL=${PR_URL}" > build.env
+  artifacts:
+    reports:
+      dotenv: build.env
 
-      account default : notification
-      EOF
 
-    - |
-      cat <<EOF | msmtp -v -a default ${RECIPIENT_EMAILS}
-      To: ${RECIPIENT_EMAILS}
-      From: ${SMTP_FROM_EMAIL}
-      Subject: [ PR Updated ] ${GITHUB_REPO} (${TARGET_BRANCH}) - Work by ${GITLAB_USER_NAME}
+# PART 2: Email POC (Draft Link Output)
+poc_email_link:
+  stage: sync_github
+  image: alpine:latest
+  needs:
+    - job: sync_and_create_mr_on_github
+      artifacts: true
+  script:
+    - echo "=-=-= Step 4 - Generating Email Draft POC Link =-=-="
 
-      Hello Team,
+    # 1. Target recipients (Use your CI variable or hardcoded team emails)
+    - TARGET_RECIPIENTS="${RECIPIENT_EMAILS}"
 
-      A Pull Request targeting 'develop' has been synced on GitHub for repository '${GITHUB_REPO}'.
+    # 2. Format Subject & Body (URL-encoded: %0D%0A creates newlines)
+    - SUBJECT_TEXT="[ PR Updated ] ${GITHUB_REPO} (${CI_COMMIT_REF_NAME}) - Work by ${GITLAB_USER_NAME}"
+    - BODY_TEXT="Hello Team,%0D%0A%0D%0AA Pull Request targeting 'develop' has been synced on GitHub for repository '${GITHUB_REPO}'.%0D%0A%0D%0A• Developer: ${GITLAB_USER_NAME} (${GITLAB_USER_EMAIL})%0D%0A• Repository: ${GITHUB_REPO}%0D%0A• Branch: ${CI_COMMIT_REF_NAME}%0D%0A• Commit SHA: ${CI_COMMIT_SHORT_SHA}%0D%0A%0D%0AReview and Merge PR here:%0D%0A${PR_URL}%0D%0A%0D%0A--%0D%0AAutomated Notification | GitLab CI"
 
-      • Developer: ${GITLAB_USER_NAME}
-      • Repository: ${GITHUB_REPO}
-      • Branch: ${TARGET_BRANCH}
-      • Commit SHA: ${CI_COMMIT_SHORT_SHA}
+    # 3. Construct Web Gmail Composer URL & Mailto fallback URL
+    - GMAIL_COMPOSE_URL="https://mail.google.com/mail/?view=cm&fs=1&to=${TARGET_RECIPIENTS}&su=${SUBJECT_TEXT}&body=${BODY_TEXT}"
+    - MAILTO_URL="mailto:${TARGET_RECIPIENTS}?subject=${SUBJECT_TEXT}&body=${BODY_TEXT}"
 
-      Review and Merge PR here:
-      ${PR_URL}
-
-      --
-      Automated Notification | GitLab CI / Ignosis Pipeline
-      EOF
-
-    - echo "Plain text notification email sent successfully!"
+    # 4. Output the clickable links into the job log
+    - echo -e "\n=========================================================================="
+    - echo -e "  EMAIL DRAFT READY FOR USER - ${GITLAB_USER_NAME} (${GITLAB_USER_EMAIL})"
+    - echo -e "=========================================================================="
+    - echo -e "  OPTION 1 (Web Gmail) - Ctrl/Cmd + Click to open pre-filled Gmail draft"
+    - echo -e "  ${GMAIL_COMPOSE_URL}"
+    - echo -e "\n  OPTION 2 (Default Client) - Ctrl/Cmd + Click for native Mail app / Outlook"
+    - echo -e "  ${MAILTO_URL}"
+    - echo -e "==========================================================================\n"
