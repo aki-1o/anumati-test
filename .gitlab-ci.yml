@@ -159,7 +159,7 @@ poc_email_link:
 
     # 2. Format Subject & Body (URL-encoded: %0D%0A creates newlines)
     - SUBJECT_TEXT="[ PR Updated ] ${GITHUB_REPO} (${CI_COMMIT_REF_NAME}) - Work by ${GITLAB_USER_NAME}"
-    - BODY_TEXT="Hello Team,%0D%0A%0D%0AA Pull Request targeting 'develop' has been synced on GitHub for repository '${GITHUB_REPO}'.%0D%0A%0D%0A• Developer: ${GITLAB_USER_NAME} (${GITLAB_USER_EMAIL})%0D%0A• Repository: ${GITHUB_REPO}%0D%0A• Branch: ${CI_COMMIT_REF_NAME}%0D%0A• Commit SHA: ${CI_COMMIT_SHORT_SHA}%0D%0A%0D%0AReview and Merge PR here:%0D%0A${PR_URL}%0D%0A%0D%0A--%0D%0AAutomated Notification | GitLab CI"
+    - BODY_TEXT="Hello Team,%0D%0A%0D%0AA Pull Request targeting 'develop' has been synced on GitHub for repository '${GITHUB_REPO}'.%0D%0A%0D%0A• Developer:${GITLAB_USER_NAME} (${GITLAB_USER_EMAIL})%0D%0A• Repository:${GITHUB_REPO}%0D%0A• Branch:${CI_COMMIT_REF_NAME}%0D%0A• Commit SHA:${CI_COMMIT_SHORT_SHA}%0D%0A%0D%0AReview and Merge PR here:%0D%0A${PR_URL}%0D%0A%0D%0A--%0D%0AAutomated Notification | GitLab CI"
 
     # 3. Construct Web Gmail Composer URL & Mailto fallback URL
     - GMAIL_COMPOSE_URL="https://mail.google.com/mail/?view=cm&fs=1&to=${TARGET_RECIPIENTS}&su=${SUBJECT_TEXT}&body=${BODY_TEXT}"
