@@ -1,108 +1,38 @@
-# 1. Base Docker image containing OpenJDK 17 and Maven
 image: maven:3.9-eclipse-temurin-17
 
-# 2. Define the pipeline execution stages in sequential order
 stages:
-  - prepare
   - build
-  - test
-  - deploy
-  - sync_github
-
-# 3. Cache the local Maven repository across builds so we don't re-download dependencies every run
-cache:
-  key: maven-cache-$CI_COMMIT_REF_SLUG
-  paths:
-    - .m2/repository
+  - sync_and_poc
 
 # -------------------------------------------------------------------
-# STAGE 1: PREPARE
-# -------------------------------------------------------------------
-check-environment:
-  stage: prepare
-  script:
-    - echo "=-=-= Verifying Runner Environment =-=-="
-    - java -version
-    - mvn -version
-    - pwd
-    - ls -la
-
-# -------------------------------------------------------------------
-# STAGE 2: BUILD
+# STAGE 1: FAST BUILD
 # -------------------------------------------------------------------
 compile-and-package:
   stage: build
   script:
-    - echo "=-=-= Building Spring Boot Application =-=-="
     - mvn clean package -DskipTests
   artifacts:
-    name: "spring-boot-app-$CI_COMMIT_SHORT_SHA"
-    expire_in: 3 days
+    expire_in: 1 day
     paths:
       - target/*.jar
 
 # -------------------------------------------------------------------
-# STAGE 3: TEST
+# STAGE 2: FAST GITHUB SYNC & EMAIL POC LINK
 # -------------------------------------------------------------------
-run-unit-tests:
-  stage: test
-  cache:
-    key: maven-cache-$CI_COMMIT_REF_SLUG
-    paths:
-      - .m2/repository
-    policy: pull  # Only read from cache, don't re-upload
-  script:
-    - echo "=-=-= Running Unit Tests =-=-="
-    - mvn test
-  artifacts:
-    when: always
-    paths:
-      - target/surefire-reports/
-
-# -------------------------------------------------------------------
-# STAGE 4: DEPLOY
-# -------------------------------------------------------------------
-deploy-to-staging:
-  stage: deploy
+fast_sync_and_poc:
+  stage: sync_and_poc
   image: alpine:latest
   before_script:
-    - apk add --no-cache bash curl
+    - apk add --no-cache git bash curl jq python3
   script:
-    - echo "=-=-= Deploying to Staging Environment =-=-="
-    - ls -lh target/*.jar
-    - echo "App successfully verified and ready for deployment!"
-  environment:
-    name: staging
-    url: https://staging.mycompany.internal
-  rules:
-    - if: '$CI_COMMIT_BRANCH == "main"'
-      when: on_success
-
-# -------------------------------------------------------------------
-# STAGE 5: SYNC TO GITHUB & BROADCAST NOTIFICATION
-# -------------------------------------------------------------------
-
-# PART 1: Sync branch & Create GitHub PR
-sync_and_create_mr_on_github:
-  stage: sync_github
-  image: alpine:latest
-  before_script:
-    - apk add --no-cache git bash curl jq
-  script:
-    - echo "=-=-= Step 1 - Configuring Identity and Isolation =-=-="
+    # 1. Config & Mirroring
     - git config --global user.name "${GITLAB_USER_NAME}"
     - git config --global user.email "${GITLAB_USER_EMAIL}"
-
-    # Match target GitHub branch to current GitLab branch name
     - TARGET_BRANCH="${CI_COMMIT_REF_NAME}"
-    - 'echo "Isolated target repository - ${GITHUB_OWNER}/${GITHUB_REPO}"'
-    - 'echo "Syncing branch - ${TARGET_BRANCH}"'
-
-    - echo "=-=-= Step 2 - Mirroring Branch to GitHub =-=-="
     - git remote add github https://${GITHUB_TOKEN}@github.com/${GITHUB_OWNER}/${GITHUB_REPO}.git || git remote set-url github https://${GITHUB_TOKEN}@github.com/${GITHUB_OWNER}/${GITHUB_REPO}.git
     - git push github HEAD:refs/heads/${TARGET_BRANCH} --force
 
-    - echo "=-=-= Step 3 - Triggering GitHub REST API for Pull Request =-=-="
+    # 2. GitHub PR API Call
     - |
       PR_RESPONSE=$(curl -s -X POST \
         -H "Authorization: Bearer ${GITHUB_TOKEN}" \
@@ -111,73 +41,48 @@ sync_and_create_mr_on_github:
         -d "{
           \"title\": \"[Sync] Updates from ${TARGET_BRANCH} (${CI_COMMIT_SHORT_SHA})\",
           \"head\": \"${TARGET_BRANCH}\",
-          \"base\": \"develop\",                                
-          \"body\": \"**Developer:** ${GITLAB_USER_NAME}\n**Source Branch:** ${TARGET_BRANCH}\n**Commit SHA:** ${CI_COMMIT_SHORT_SHA}\n\nAutomated sync from GitLab CI.\"
+          \"base\": \"develop\",
+          \"body\": \"Automated sync from GitLab CI.\"
         }")
 
-    - echo "Full API Response - ${PR_RESPONSE}"
-
-    # Try extracting PR URL from creation response
     - PR_URL=$(echo "$PR_RESPONSE" | jq -r '.html_url // empty')
 
-    # Fetching existing PR URL if already exists
+    # Fetch existing PR if creation returned empty
     - |
       if [ -z "$PR_URL" ]; then
-        echo "Checking if Pull Request already exists..."
         EXISTING_PR=$(curl -s -H "Authorization: Bearer ${GITHUB_TOKEN}" \
           "https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/pulls?head=${GITHUB_OWNER}:${TARGET_BRANCH}&base=develop")
         PR_URL=$(echo "$EXISTING_PR" | jq -r '.[0].html_url // empty')
       fi
 
-    - |
-      if [ -z "$PR_URL" ]; then
-        echo "Could not resolve or create Pull Request."
-        exit 1
-      fi
-
     - echo "Pull Request ready at - ${PR_URL}"
 
-    # Pass PR_URL to downstream jobs via dotenv artifact
-    - echo "PR_URL=${PR_URL}" > build.env
-  artifacts:
-    reports:
-      dotenv: build.env
-
-
-# PART 2: Email POC (Fully Pre-written Email Draft Link Output)
-poc_email_link:
-  stage: sync_github
-  image: alpine:latest
-  needs:
-    - job: sync_and_create_mr_on_github
-      artifacts: true
-  script:
-    - echo "=-=-= Step 4 - Generating Complete Email Draft POC Link =-=-="
-
-    # 1. Target recipients
-    - TARGET_RECIPIENTS="${RECIPIENT_EMAILS}"
-
-    # 2. Format Subject & Body (URL-encoded: %0D%0A creates newlines)
-    - SUBJECT_TEXT="[ PR Updated ] ${GITHUB_REPO} (${CI_COMMIT_REF_NAME}) - Work by ${GITLAB_USER_NAME}"
-    - BODY_TEXT="Hello Team,%0D%0A%0D%0AA Pull Request targeting 'develop' has been synced on GitHub for repository '${GITHUB_REPO}'.%0D%0A%0D%0A• Developer:${GITLAB_USER_NAME} (${GITLAB_USER_EMAIL})%0D%0A• Repository:${GITHUB_REPO}%0D%0A• Branch:${CI_COMMIT_REF_NAME}%0D%0A• Commit SHA:${CI_COMMIT_SHORT_SHA}%0D%0A%0D%0AReview and Merge PR here:%0D%0A${PR_URL}%0D%0A%0D%0A--%0D%0AAutomated Notification | GitLab CI"
-
-    # 2. Format Subject Line
-    - SUBJECT_TEXT="[PR Sync] ${GITHUB_REPO} - ${CI_COMMIT_REF_NAME} by ${GITLAB_USER_NAME}"
-
-    # 3. Complete pre-written email body draft (using %0D%0A for clean newlines)
+    # 3. Generate Draft Email Link via Inline Python
     - |
-      BODY_TEXT="Hi Team,%0D%0A%0D%0AA new Pull Request targeting 'develop' has been automatically created on GitHub for repository '${GITHUB_REPO}'.%0D%0A%0D%0AHere are the details:%0D%0A- Developer: ${GITLAB_USER_NAME} (${GITLAB_USER_EMAIL})%0D%0A- Repository: ${GITHUB_REPO}%0D%0A- Source Branch: ${CI_COMMIT_REF_NAME}%0D%0A- Target Branch: develop%0D%0A- Commit SHA: ${CI_COMMIT_SHORT_SHA}%0D%0A%0D%0APlease review and merge the Pull Request here:%0D%0A${PR_URL}%0D%0A%0D%0ARegards,%0D%0A${GITLAB_USER_NAME}"
+      python3 -c "
+      import urllib.parse, os
 
-    # 4. Construct Web Gmail Composer URL & Mailto fallback URL
-    - GMAIL_COMPOSE_URL="https://mail.google.com/mail/?view=cm&fs=1&to=${TARGET_RECIPIENTS}&su=${SUBJECT_TEXT}&body=${BODY_TEXT}"
-    - MAILTO_URL="mailto:${TARGET_RECIPIENTS}?subject=${SUBJECT_TEXT}&body=${BODY_TEXT}"
+      recipients = os.getenv('RECIPIENT_EMAILS', '')
+      repo = os.getenv('GITHUB_REPO', '')
+      branch = os.getenv('CI_COMMIT_REF_NAME', '')
+      user_name = os.getenv('GITLAB_USER_NAME', '')
+      user_email = os.getenv('GITLAB_USER_EMAIL', '')
+      sha = os.getenv('CI_COMMIT_SHORT_SHA', '')
+      pr_url = '${PR_URL}'
 
-    # 5. Output the clickable links into the job log
-    - echo -e "\n=========================================================================="
-    - echo -e "  EMAIL DRAFT READY FOR USER - ${GITLAB_USER_NAME} (${GITLAB_USER_EMAIL})"
-    - echo -e "=========================================================================="
-    - echo -e "  OPTION 1 (Web Gmail) - Ctrl/Cmd + Click to open pre-drafted email in browser"
-    - echo -e "  ${GMAIL_COMPOSE_URL}"
-    - echo -e "\n  OPTION 2 (Default Client) - Ctrl/Cmd + Click for native Mail app / Outlook"
-    - echo -e "  ${MAILTO_URL}"
-    - echo -e "==========================================================================\n"
+      subject = f'[PR Sync] {repo} - {branch} by {user_name}'
+      body = f'Hi Team,\n\nA new PR targeting develop was created for {repo}.\n\nDeveloper: {user_name} ({user_email})\nBranch: {branch}\nCommit: {sha}\n\nPR Link:\n{pr_url}'
+
+      encoded_to = urllib.parse.quote(recipients)
+      encoded_su = urllib.parse.quote(subject)
+      encoded_body = urllib.parse.quote(body)
+
+      gmail_url = f'https://mail.google.com/mail/?view=cm&fs=1&to={encoded_to}&su={encoded_su}&body={encoded_body}'
+
+      print('\n==========================================================================')
+      print(f'  EMAIL DRAFT READY FOR USER - {user_name} ({user_email})')
+      print('==========================================================================')
+      print('  Ctrl/Cmd + Click to open pre-filled Gmail draft in NEW TAB:')
+      print(f'  {gmail_url}')
+      print('==========================================================================\n')
+      "
